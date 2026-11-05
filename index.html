@@ -1218,7 +1218,7 @@ function renderInsights() {
 function renderHero() {
   const sel = rowsSel(), all = rowsAll();
   const si = all.filter(r => r.compra === 'Sí').length, n = all.filter(r => r.compra).length;
-  $('#factN').textContent = state.sourceRows.toLocaleString('es-ES');
+  $('#factN').textContent = state.rows.length.toLocaleString('es-ES');
   $('#factBuy').textContent = pct(si, n);
   $$('[data-seal-n]').forEach(el => el.textContent = sel.length);
   const nSi = all.filter(r => r.compra === 'Sí').length, nNo = all.filter(r => r.compra === 'No').length;
