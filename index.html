@@ -117,6 +117,13 @@ section{margin-top:34px}
 .sec-head{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin:0 2px 14px;flex-wrap:wrap}
 .sec-head h2{margin:0;font-family:var(--font-head);font-size:1.6rem;font-weight:700;line-height:1.15;text-transform:uppercase;padding-bottom:6px;border-bottom:3px solid var(--rasp);display:inline-block}
 .sec-head p{margin:4px 0 0;color:var(--ink-50);font-size:.9rem;max-width:70ch}
+.source-table-wrap{max-height:72vh;overflow:auto;border:1px solid var(--line);border-radius:4px}
+.source-table{width:100%;border-collapse:separate;border-spacing:0;font-size:.78rem;white-space:nowrap}
+.source-table th,.source-table td{padding:8px 10px;border-bottom:1px solid var(--line);border-right:1px solid var(--line);text-align:left}
+.source-table th{position:sticky;top:0;z-index:1;background:var(--mist);font-weight:700}
+.source-table tr:last-child td{border-bottom:0}
+.source-table th:last-child,.source-table td:last-child{border-right:0}
+.source-table-note{margin:0 0 10px;color:var(--ink-50);font-size:.84rem}
 .grid{display:grid;gap:16px}
 .g-2{grid-template-columns:1.15fr 1fr}
 .card{background:var(--paper);border:1px solid var(--line);border-radius:6px;padding:20px 22px 16px;min-width:0;display:flex;flex-direction:column}
@@ -430,6 +437,21 @@ body.pdf-mode *{animation:none !important;transition:none !important}
     <ul id="insights"></ul>
   </div>
 
+  <section id="datos" hidden>
+    <div class="sec-head">
+      <div>
+        <h2>Datos de origen · Extracto 1</h2>
+        <p>Filas recibidas directamente de la hoja de cálculo.</p>
+      </div>
+    </div>
+    <article class="card">
+      <p class="source-table-note" id="sourceTableNote" aria-live="polite">Comprobando conexión con la hoja…</p>
+      <div class="source-table-wrap">
+        <table class="source-table" id="sourceTable"></table>
+      </div>
+    </article>
+  </section>
+
   <section id="atributos">
     <div class="sec-head">
       <div>
@@ -636,7 +658,7 @@ const CONFIG = {
   samplia: { ts: 'survey_completed_at', glob: '9Lz9cXgkuRc1VG8RzGQP', qp: 'aP33PYQSFB8AhcRtX0Xf', tex: 'nLffTcymxdrLK7drnAfH',
              efi: 'oGLEGCWRVG1ocMh0g7aI', prac: 'V1TmPmDzS9fwLVPYw7xI', gen: 'gender', age: 'user_age', compra: 'N3evy0RqhArWfr1mq0HL', porque: 'KS4AHTiVv2fsTFriVOAK' },
   snapshotDate: '28 de octubre de 2026',
-  // Solo se leen las columnas A a I de la hoja (de «Marca temporal» a «Sentimiento»)
+  // El análisis usa las columnas necesarias; la tabla de Extracto 1 conserva todas las columnas.
   maxCols: 9,
   // Personas que dicen no haber recibido o probado el producto: sus respuestas no valoran el producto y se excluyen del informe
   notReceived: /\bno\s+(?:(?:me|le|se|nos)\s+)?(?:(?:lo|la|los|las)\s+)?(?:(?:han|ha|he|habian|habia)\s+)?(?:dado|dieron|entregado|entregaron|recibido|recibi|recibieron|probado|probar|llegado|llego)\b|\bno (?:lo )?he podido probar(?:lo|la|los|las)?\b|\bno puedo valorar\b|\bno se me (?:ha )?entregado\b|\bno iba en mi lote\b/,
@@ -667,6 +689,7 @@ const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').match
 
 const state = {
   rows: [], headers: {}, source: '', liveErrors: [], excluded: 0, sourceRows: 0,
+  sourceMatrix: null, sourceName: '',
   f: { compra: 'all', gen: 'all', age: 'all' },
   compare: true,
   vb: { q: '', sent: 'all', theme: null, limit: 12 }
@@ -846,20 +869,28 @@ async function loadData() {
     const tries = await Promise.all(CONFIG.sources.map(async src => {
       const url = src.url(CONFIG.gid);
       try {
+        const text = await fetchText(url);
+        const sourceMatrix = parseCSV(text);
         const metadata = {};
-        const rows = buildRows(toMatrix(await fetchText(url)), metadata);
-        return { src, rows, ...metadata };
+        const rows = buildRows(toMatrix(text), metadata);
+        return { src, rows, sourceMatrix, ...metadata };
       } catch (e) {
         errors.push(src.name + ': ' + e.message);
         console.warn('[datos] ' + src.name + ' falló (' + url + '):', e.message);
         return null;
       }
     }));
-    const best = tries.filter(Boolean).sort((a, b) => b.rows.length - a.rows.length)[0];
+    const best = tries.filter(Boolean).sort((a, b) =>
+      Number(b.src.name === 'gviz «Extracto 1»') - Number(a.src.name === 'gviz «Extracto 1»') ||
+      b.rows.length - a.rows.length
+    )[0];
     if (best) {
       state.rows = best.rows; state.excluded = best.excluded; state.sourceRows = best.sourceRows; state.source = 'live';
+      state.sourceMatrix = best.src.name === 'gviz «Extracto 1»' ? best.sourceMatrix : null;
+      state.sourceName = best.src.name;
       console.info('[datos] Fuente usada: ' + best.src.name + ' (' + best.rows.length + ' respuestas válidas de ' + best.sourceRows + ' filas)');
       setStatus('live', `Datos en vivo de la hoja (${state.sourceRows} respuestas)`);
+      renderSourceTable();
       return;
     }
   } else errors.push('protocolo ' + location.protocol + ' sin acceso a la red');
@@ -868,8 +899,25 @@ async function loadData() {
   const metadata = {};
   state.rows = buildRows(toMatrix(snap), metadata);
   state.excluded = metadata.excluded; state.sourceRows = metadata.sourceRows; state.source = 'local';
+  state.sourceMatrix = null; state.sourceName = '';
   console.error('[datos] Sin conexión con la hoja; se muestra la copia local.', errors);
   setStatus('local', `Copia local del ${CONFIG.snapshotDate} (${state.sourceRows} respuestas). Sin conexión con la hoja.`);
+  renderSourceTable();
+}
+function renderSourceTable() {
+  const table = $('#sourceTable'), note = $('#sourceTableNote');
+  if (!table || !note) return;
+  const matrix = state.sourceMatrix;
+  if (!matrix || !matrix.length) {
+    table.replaceChildren();
+    note.textContent = 'No se pudo conectar con «Extracto 1». El informe usa la copia local; no se muestran esos datos como si fueran filas en vivo.';
+    return;
+  }
+  const [headers, ...rows] = matrix;
+  table.innerHTML = `<thead><tr>${headers.map(h => `<th scope="col">${esc(h)}</th>`).join('')}</tr></thead><tbody>${
+    rows.map(row => `<tr>${headers.map((_, i) => `<td>${esc(row[i] || '')}</td>`).join('')}</tr>`).join('')
+  }</tbody>`;
+  note.textContent = `${rows.length.toLocaleString('es-ES')} filas · ${headers.length.toLocaleString('es-ES')} columnas · Fuente: ${state.sourceName}.`;
 }
 function footNote() {
   const el = $('#footSrc'); if (!el) return;
@@ -1218,9 +1266,9 @@ function renderInsights() {
 function renderHero() {
   const sel = rowsSel(), all = rowsAll();
   const si = all.filter(r => r.compra === 'Sí').length, n = all.filter(r => r.compra).length;
-  $('#factN').textContent = state.rows.length.toLocaleString('es-ES');
+  $('#factN').textContent = state.sourceRows.toLocaleString('es-ES');
   $('#factBuy').textContent = pct(si, n);
-  $$('[data-seal-n]').forEach(el => el.textContent = sel.length);
+  $$('[data-seal-n]').forEach(el => el.textContent = state.sourceRows.toLocaleString('es-ES'));
   const nSi = all.filter(r => r.compra === 'Sí').length, nNo = all.filter(r => r.compra === 'No').length;
   $('#compraNote').textContent = `${pct(nSi, nSi + nNo)} responde que sí y ${pct(nNo, nSi + nNo)} que no.`;
 }
@@ -1317,7 +1365,7 @@ function initControls() {
   const io = new IntersectionObserver(es => {
     es.forEach(en => { if (en.isIntersecting) links.forEach(l => l.classList.toggle('active', l.getAttribute('href') === '#' + en.target.id)); });
   }, { rootMargin: '-35% 0px -60% 0px' });
-  ['resumen', 'atributos', 'compra', 'sentimiento', 'opiniones'].forEach(id => io.observe(document.getElementById(id)));
+  ['resumen', 'datos', 'atributos', 'compra', 'sentimiento', 'opiniones'].forEach(id => io.observe(document.getElementById(id)));
 
   $('#btnReload').addEventListener('click', async () => {
     const b = $('#btnReload'); b.disabled = true;
